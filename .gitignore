@@ -1,0 +1,18 @@
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.env
+.env.*
+.streamlit/secrets.toml
+*.wav
+*.mp3
+*.m4a
+*.webm
+.DS_Store
+
+_runtime/
+_models/
+MeetNote AI.exe
+!examples/*.wav
