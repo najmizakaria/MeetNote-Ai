@@ -12,7 +12,7 @@ from threading import Thread
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from meetnote.notes import DEFAULT_MODEL, create_notes, notes_text
+from meetnote.notes import MAX_TRANSCRIPT_CHARS, MODEL, create_notes, installed_models, notes_text
 from meetnote.transcriber import LANGUAGES, make_model, transcribe_bytes, transcribe_file
 
 
@@ -33,12 +33,8 @@ SOURCES = ("Microphone", "Laptop audio", "Both")
 get_model = lru_cache(maxsize=1)(make_model)
 
 
-def describe(error, secret=""):
-    text = " ".join(str(error).split()) or type(error).__name__
-    if secret:
-        text = text.replace(secret, "[hidden]")
-    text = re.sub(r"AIza[0-9A-Za-z_-]{20,}", "[hidden]", text)
-    return text[:240]
+def describe(error):
+    return (" ".join(str(error).split()) or type(error).__name__)[:240]
 
 
 def recognize(source, language, model_name):
@@ -82,8 +78,7 @@ class MeetNoteApp:
         self.loopback = tk.StringVar()
         self.language = tk.StringVar(value="Auto detect")
         self.whisper = "tiny"
-        self.api_key = os.getenv("GEMINI_API_KEY", "").strip()
-        self.gemini = os.getenv("GEMINI_MODEL", "").strip() or DEFAULT_MODEL
+        self.summary_model = tk.StringVar(value=MODEL)
         self.status = tk.StringVar(value="Record a meeting or open an audio file to begin.")
         self.timer = tk.StringVar(value="00:00")
         self.capture_label = tk.StringVar(value="Ready to record")
@@ -219,8 +214,9 @@ class MeetNoteApp:
         self.label(transcript, textvariable=self.transcript_label, fg=MUTED).pack(anchor="w")
 
         self.label(notes, "Meeting notes", size=17, bold=True).pack(anchor="w")
-        self.label(notes, "Generated from the current transcript", fg=MUTED).pack(anchor="w", pady=(4, 0))
+        self.label(notes, textvariable=self.summary_model, fg=MUTED).pack(anchor="w", pady=(4, 0))
         self.note_view = self.editor(notes)
+        self.note_view.configure(height=3)
         self.note_view.tag_configure("heading", font=(FONT, 11, "bold"), foreground=TEAL, spacing1=10)
         self.note_view.tag_configure("hint", foreground=MUTED)
         self.render_notes()
@@ -298,8 +294,10 @@ class MeetNoteApp:
         self.open_button.configure(state="disabled" if recording or busy else "normal")
         self.refresh_button.configure(state="disabled" if recording or busy else "normal")
         self.new_button.configure(state="disabled" if recording or busy else "normal")
-        has_text = bool(self.current_transcript())
-        self.summarize_button.configure(state="normal" if has_text and not recording and not busy else "disabled")
+        transcript = self.current_transcript()
+        has_text = bool(transcript)
+        can_summarize = has_text and not recording and not busy
+        self.summarize_button.configure(state="normal" if can_summarize else "disabled")
         for control in (self.txt_button, self.docx_button):
             control.configure(state="normal" if has_text else "disabled")
 
@@ -381,12 +379,12 @@ class MeetNoteApp:
         self.audio.append((Path(filename), LANGUAGES[self.language.get()], self.whisper))
         self.start_audio_job()
 
-    def start_job(self, name, function, *args, secret=""):
+    def start_job(self, name, function, *args):
         def run():
             try:
                 self.results.put((name, function(*args), ""))
             except Exception as error:
-                self.results.put((name, None, describe(error, secret)))
+                self.results.put((name, None, describe(error)))
 
         self.job = name
         self.refresh_controls()
@@ -479,15 +477,19 @@ class MeetNoteApp:
         window.transient(self.root)
         window.resizable(False, False)
         window.configure(bg=WHITE, padx=20, pady=16)
-        key = tk.StringVar(value=self.api_key)
-        gemini = tk.StringVar(value=self.gemini)
         model = tk.StringVar(value=self.whisper)
         language = tk.StringVar(value=self.language.get())
         self.label(window, "AI settings", size=17, bold=True).pack(anchor="w")
-        key_field = self.field(window, "Gemini API key", key)
-        key_field.configure(show="•", width=45)
-        self.label(window, "The key stays in memory for this session.", fg=MUTED).pack(anchor="w", pady=(4, 0))
-        self.field(window, "Gemini model", gemini)
+        selected_summary_model = tk.StringVar(value=self.summary_model.get())
+        try:
+            detected = installed_models()
+            hint = "Select a model installed in Ollama." if detected else "Install a model in Ollama and reopen Settings."
+        except RuntimeError as error:
+            detected = ()
+            hint = str(error)
+        choices = tuple(dict.fromkeys((selected_summary_model.get(), *detected)))
+        self.field(window, "Summary model", selected_summary_model, choices)
+        self.label(window, hint, fg=MUTED, wraplength=315, justify="left").pack(anchor="w", pady=(4, 0))
         self.field(window, "Speech language", language, tuple(LANGUAGES))
         self.field(window, "Whisper model", model, MODELS)
         self.label(window, "Tiny is fastest. Larger models take longer on a CPU.", fg=MUTED).pack(anchor="w", pady=(4, 0))
@@ -495,11 +497,11 @@ class MeetNoteApp:
                    fg=MUTED, wraplength=315, justify="left").pack(anchor="w", pady=(5, 3))
 
         def save():
-            self.api_key = key.get().strip()
-            self.gemini = gemini.get().strip() or DEFAULT_MODEL
+            self.summary_model.set(selected_summary_model.get())
             self.whisper = model.get()
             self.language.set(language.get())
             window.destroy()
+            self.refresh_controls()
             if not self.job and not self.capture and not self.failed:
                 self.message("Settings saved for this session.")
 
@@ -508,33 +510,33 @@ class MeetNoteApp:
         ttk.Button(actions, text="Save settings", style="Primary.TButton", command=save).pack(side="right")
         ttk.Button(actions, text="Cancel", command=window.destroy).pack(side="right", padx=(0, 8))
         window.bind("<Escape>", lambda event: window.destroy())
-        key_field.focus_set()
+        window.focus_set()
 
     def summarize(self):
         source = self.current_transcript()
         if not source or self.capture or self.job:
             return
-        if not self.api_key:
-            self.message("Add a Gemini API key in Settings to generate notes.", error=True)
-            self.settings()
-            return
-        if len(source) > 60000:
+        if len(source) > MAX_TRANSCRIPT_CHARS:
             self.message("This transcript exceeds 60,000 characters. Summarize it in smaller sections.", error=True)
             return
         self.job_source = source
-        self.message("Generating notes with Gemini. The transcript is sent to Google.")
-        self.start_job("notes", create_notes, source, self.api_key, self.gemini, secret=self.api_key)
+        model = self.summary_model.get()
+        self.message(f"Generating notes locally with {model}. Longer transcripts may take a few minutes.")
+        self.start_job("notes", create_notes, source, model)
 
     def notes_result(self, value, error):
         if error:
-            self.message(f"Gemini could not generate notes. {error} Your transcript is available.", error=True)
+            if self.notes is None:
+                self.render_notes("Notes unavailable. See the status below for the next step.")
+            self.message(f"{error} Your transcript is available.", error=True)
         elif self.current_transcript() != self.job_source:
-            self.message("The transcript changed while Gemini was working. Generate notes again.", error=True)
+            self.message("The transcript changed while notes were being generated. Generate notes again.", error=True)
         else:
             self.notes = value
             self.notes_source = self.job_source
             self.render_notes()
-            self.message("Meeting notes ready. Review the decisions and deadlines before sharing.")
+            model = value.get("model") or self.summary_model.get()
+            self.message(f"Meeting notes ready from {model}. Review decisions and deadlines before sharing.")
         self.job_source = None
 
     def render_notes(self, hint="Add a transcript, then select Generate notes."):

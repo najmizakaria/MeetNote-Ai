@@ -6,4 +6,8 @@ secondaryBackgroundColor = "#FFFFFF"
 textColor = "#17333B"
 font = "sans serif"
 [server]
+address = "127.0.0.1"
 maxUploadSize = 120
+
+[browser]
+gatherUsageStats = false

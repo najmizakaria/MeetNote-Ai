@@ -62,3 +62,42 @@ def test_notes_only_export_with_matching_transcript(workspace, tmp_path, monkeyp
     saved = text.read_text(encoding="utf-8")
     assert "The date changed." in saved
     assert "Test the app" not in saved
+
+
+
+def test_local_summary_failure_preserves_transcript_and_export(workspace, monkeypatch):
+    text = "Maya will check the audio."
+    workspace.transcript.insert("1.0", text)
+    workspace.transcript_changed()
+    pending = []
+    monkeypatch.setattr(workspace, "start_job", lambda *args: pending.append(args))
+    workspace.summarize_button.invoke()
+    assert pending == [("notes", desktop.create_notes, text, "qwen3:4b")]
+    workspace.notes_result(None, "Start Ollama for Windows.")
+    workspace.refresh_controls()
+    assert workspace.current_transcript() == text
+    assert "Start Ollama" in workspace.status.get()
+    assert workspace.txt_button.instate(["!disabled"])
+    assert workspace.docx_button.instate(["!disabled"])
+
+
+
+def test_summary_model_picker_uses_installed_gemma(workspace, monkeypatch):
+    monkeypatch.setattr(desktop, "installed_models", lambda: ("gemma4:latest", "qwen3:4b"))
+    workspace.settings()
+    window = workspace.settings_window
+    picker = next(child for child in window.winfo_children() if child.winfo_class() == "TCombobox")
+    choices = tuple(picker.cget("values"))
+    assert set(choices) == {"qwen3:4b", "gemma4:latest"}
+    picker.current(choices.index("gemma4:latest"))
+    actions = next(child for child in window.winfo_children() if child.winfo_class() == "Frame")
+    save = next(child for child in actions.winfo_children() if child.cget("text") == "Save settings")
+    save.invoke()
+
+    workspace.transcript.insert("1.0", "The team agreed to test.")
+    workspace.transcript_changed()
+    pending = []
+    monkeypatch.setattr(workspace, "start_job", lambda *args: pending.append(args))
+    workspace.summarize_button.invoke()
+    assert pending == [("notes", desktop.create_notes, "The team agreed to test.", "gemma4:latest")]
+

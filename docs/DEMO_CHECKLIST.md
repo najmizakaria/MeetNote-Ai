@@ -1,18 +1,18 @@
 # Demo and QA checklist
 
-- [ ] GitHub push works and `.gitignore` excludes API keys and virtual environments.
-- [ ] Public app opens at an HTTPS Streamlit URL.
+- [ ] GitHub push works and `.gitignore` excludes runtime bundles and virtual environments.
+- [ ] The Windows app opens and Qwen3 is installed in Ollama.
 - [ ] Browser microphone records a 20–30 second consented test; stop then transcribe.
 - [ ] Local microphone records and the transcript updates after approx 8 seconds.
 - [ ] Local laptop audio (Stereo Mix / VB-Cable) receives actual speaker output.
 - [ ] Local Both uses distinct input devices and picks up both voices.
 - [ ] English and Malay-language meeting scripts have their expected language set.
 - [ ] Manually correct transcript before summarizing if Whisper errs.
-- [ ] Gemini generates overview, points, decisions and actions from known reference script.
+- [ ] With the internet disconnected, Qwen3 generates notes from English and Bahasa Melayu transcripts.
 - [ ] Missing owner or deadline remains 'Not specified' rather than invented.
-- [ ] Simulate invalid API key or unavailable model: transcript remains available for retry.
+- [ ] Stop Ollama or try before installing the model and confirm the transcript can still be exported.
 - [ ] TXT and DOCX download both open and contain the correct transcript.
-- [ ] Test on a phone browser for narrow-viewport overflow.
+- [ ] Check the Windows layout at its minimum window size.
 - [ ] Record screen demo showing actual audio and notes, not fabricated output.
 - [ ] Capture version/library information and real screenshots for the report.
 

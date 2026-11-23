@@ -1,13 +1,11 @@
 """MeetNote AI — local/live and browser meeting transcription.
 
 Run locally: streamlit run app.py
-Deploy: use app.py as Streamlit Community Cloud entry point.
 """
 from __future__ import annotations
-import os
 from datetime import date
 import streamlit as st
-from meetnote.notes import DEFAULT_MODEL, create_notes, notes_text
+from meetnote.notes import MODEL, create_notes, notes_text
 from meetnote.export import make_docx
 from meetnote.transcriber import LANGUAGES, make_model, transcribe_bytes
 from meetnote.local_capture import LocalCapture, list_inputs
@@ -17,35 +15,34 @@ st.set_page_config(page_title="MeetNote AI | Meeting workspace", page_icon="◉"
 
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&family=Outfit:wght@500;600;700&display=swap');
 :root {--paper:#F2F6F7;--surface:#FFFFFF;--ink:#17333B;--muted:#516970;--teal:#176B68;--border:#CAD9DC;--record:#B94733;}
-html,body,[class*="css"],.stApp {font-family:'IBM Plex Sans',sans-serif!important;color:var(--ink)!important}
+html,body,[class*="css"],.stApp {font-family:'Segoe UI',sans-serif!important;color:var(--ink)!important}
 .stApp {background:var(--paper)!important}
 section.main .block-container {max-width:1220px;padding-top:2.1rem;padding-bottom:4rem}
-h1,h2,h3 {font-family:'Outfit',sans-serif!important;letter-spacing:-.025em!important;color:var(--ink)!important}
+h1,h2,h3 {font-family:'Segoe UI',sans-serif!important;letter-spacing:-.025em!important;color:var(--ink)!important}
 h1 {font-size:3.05rem!important;line-height:1.06!important;margin:.45rem 0 1.3rem!important}
 h2 {font-size:1.45rem!important}
-[data-testid="stMetricValue"] {font-family:'DM Mono',monospace!important;font-size:1.4rem!important}
-[data-testid="stMetricLabel"] {color:var(--muted)!important;font-family:'DM Mono',monospace!important;font-size:.69rem!important;letter-spacing:.07em;text-transform:uppercase}
+[data-testid="stMetricValue"] {font-family:Consolas,monospace!important;font-size:1.4rem!important}
+[data-testid="stMetricLabel"] {color:var(--muted)!important;font-family:Consolas,monospace!important;font-size:.69rem!important;letter-spacing:.07em;text-transform:uppercase}
 [data-testid="stVerticalBlockBorderWrapper"] {background:var(--surface);border-color:var(--border)!important;border-radius:12px!important}
 [data-testid="stButton"] button[kind="primary"] {background:var(--teal)!important;border-color:var(--teal)!important;color:white!important;font-weight:600;min-height:2.7rem;border-radius:8px}
-[data-testid="stButton"] button {border-radius:8px!important;font-family:'IBM Plex Sans',sans-serif!important}
+[data-testid="stButton"] button {border-radius:8px!important;font-family:'Segoe UI',sans-serif!important}
 [data-testid="stFileUploader"], [data-testid="stTextArea"] {border-color:var(--border)}
 .hero-top {display:flex;justify-content:space-between;align-items:center;gap:1rem;border-bottom:1px solid var(--border);padding-bottom:1.15rem;margin-bottom:1.7rem}
-.wordmark {font-family:'Outfit',sans-serif;font-weight:700;letter-spacing:-.045em;font-size:1.31rem}
+.wordmark {font-family:'Segoe UI',sans-serif;font-weight:700;letter-spacing:-.045em;font-size:1.31rem}
 .wordmark-dot {color:var(--teal)}
-.edition {font-family:'DM Mono',monospace;font-size:.68rem;color:var(--muted);letter-spacing:.06em;text-transform:uppercase}
-.eyebrow {font-family:'DM Mono',monospace;font-size:.72rem;letter-spacing:.13em;text-transform:uppercase;color:var(--teal)}
+.edition {font-family:Consolas,monospace;font-size:.68rem;color:var(--muted);letter-spacing:.06em;text-transform:uppercase}
+.eyebrow {font-family:Consolas,monospace;font-size:.72rem;letter-spacing:.13em;text-transform:uppercase;color:var(--teal)}
 .hero-sub {font-size:1.04rem;color:var(--muted);margin-top:-.4rem;margin-bottom:1.35rem;max-width:730px}
-.section-tag {font-family:'DM Mono',monospace;color:var(--muted);font-size:.76rem;letter-spacing:.075em;text-transform:uppercase;margin:.65rem 0 .7rem}
+.section-tag {font-family:Consolas,monospace;color:var(--muted);font-size:.76rem;letter-spacing:.075em;text-transform:uppercase;margin:.65rem 0 .7rem}
 .narrow-note {font-size:.85rem;color:var(--muted);line-height:1.45}
 .live-track {display:flex;align-items:center;gap:12px;background:#E2EFEF;border-left:4px solid var(--teal);padding:13px 16px;margin:.55rem 0 1.1rem;border-radius:0 8px 8px 0}
 .live-track.recording {border-left-color:var(--record);background:#F7E9E5}
 .signal {font-size:1.2rem;color:var(--teal)}
 .live-track.recording .signal {color:var(--record)}
-.live-label {font-family:'DM Mono',monospace;font-size:.83rem;letter-spacing:.01em}
+.live-label {font-family:Consolas,monospace;font-size:.83rem;letter-spacing:.01em}
 .transcript-display {font-size:1.03rem;line-height:1.7;padding:.3rem 0 .7rem;white-space:pre-wrap}
-.output-label {font-family:'DM Mono',monospace;font-size:.75rem;letter-spacing:.06em;color:var(--teal);text-transform:uppercase}
+.output-label {font-family:Consolas,monospace;font-size:.75rem;letter-spacing:.06em;color:var(--teal);text-transform:uppercase}
 .minor {font-size:.84rem;color:var(--muted)}
 /* Restore contrast and avoid heavy button motion. */
 button {transition:background-color .12s ease,border-color .12s ease!important}
@@ -92,22 +89,13 @@ def transcribe_clip(payload: bytes, ext: str, model_name: str, language: str | N
         return False
 
 
-def read_api_key():
-    secret = ""
-    try:
-        secret = st.secrets.get("GEMINI_API_KEY", "")
-    except Exception:
-        pass
-    return (st.session_state.get("api_key", "") or secret or os.environ.get("GEMINI_API_KEY", "")).strip()
-
-
 def summarize_current():
     try:
-        with st.spinner("Generating meeting notes with Gemini…"):
-            st.session_state.notes = create_notes(transcript(), read_api_key(), st.session_state.gemini_model)
+        with st.spinner("Generating meeting notes locally with Qwen3…"):
+            st.session_state.notes = create_notes(transcript())
         st.session_state.message = "Meeting notes generated. Check names and dates before sharing."
     except Exception as exc:
-        st.session_state.message = f"AI summary unavailable: {exc}. Your transcript is preserved; choose another model or retry later."
+        st.session_state.message = f"AI summary unavailable: {exc}. Your transcript is preserved."
 
 
 def reset_meeting():
@@ -128,7 +116,7 @@ st.markdown('<div class="hero-top"><span class="wordmark">meetnote<span class="w
             '<span class="edition">SDT 2143 / Audio workspace / v1.0</span></div>', unsafe_allow_html=True)
 st.markdown('<span class="eyebrow">Meeting intelligence / one workspace</span>', unsafe_allow_html=True)
 st.title("Record the meeting. Keep the decisions.")
-st.markdown('<div class="hero-sub">Live transcription on your computer. Browser recording and accurate meeting notes anywhere.</div>', unsafe_allow_html=True)
+st.markdown('<div class="hero-sub">Record or upload audio, edit the transcript, and generate local meeting notes.</div>', unsafe_allow_html=True)
 
 settings, extra = st.columns([2.2, 1], gap="large")
 with settings:
@@ -143,7 +131,7 @@ mode = st.radio("Recording workflow", ["Browser microphone", "Local audio device
 with st.container(border=True):
     if mode == "Browser microphone":
         st.markdown('<div class="live-track"><span class="signal">◉</span><span class="live-label">BROWSER CAPTURE · record then transcribe</span></div>', unsafe_allow_html=True)
-        st.markdown('<div class="narrow-note">Works locally and on the public website. Press Record, allow microphone access, speak, then Stop. The browser sends the finished audio clip for transcription; this mode is not live captioning.</div>', unsafe_allow_html=True)
+        st.markdown('<div class="narrow-note">Press Record, allow microphone access, speak, then Stop. The browser sends the finished audio clip for transcription; this mode is not live captioning.</div>', unsafe_allow_html=True)
         recording = st.audio_input("Record your meeting", sample_rate=16000,
                                    key=f"browser_rec_{st.session_state.recorder_serial}")
         if recording is not None:
@@ -215,12 +203,12 @@ with st.container(border=True):
                         if data:
                             transcribe_clip(data, ".wav", st.session_state.model_choice,
                                             LANGUAGES[st.session_state.language_choice])
-                        if st.session_state.auto_notes and transcript().strip() and read_api_key():
+                        if st.session_state.auto_notes and transcript().strip():
                             summarize_current()
                         st.rerun()
                     if st.session_state.segments:
                         st.markdown("**Live transcript so far**")
-                        st.write(transcript())
+                        st.text(transcript())
                     if rec.last_error:
                         st.warning(f"Audio device warning: {rec.last_error}")
                 elif rec:
@@ -248,25 +236,25 @@ with right:
     st.subheader("Meeting notes")
     notes = st.session_state.notes
     if not notes:
-        st.caption("Summaries appear here after transcription and a successful Gemini request.")
+        st.caption("Generate notes from the transcript using local Qwen3.")
         st.markdown("**Expected output**")
         st.markdown("Meeting overview · Key points · Decisions · Action items · Open questions")
     else:
         st.markdown('<div class="output-label">Overview</div>', unsafe_allow_html=True)
-        st.write(notes.get("overview") or "No overview provided.")
+        st.text(notes.get("overview") or "No overview provided.")
         for key, title in [("key_points", "Key points"), ("decisions", "Decisions"),
                            ("open_questions", "Open questions")]:
             st.markdown(f'<div class="output-label">{title}</div>', unsafe_allow_html=True)
             values = notes.get(key, [])
             if values:
                 for v in values:
-                    st.markdown(f"- {v}")
+                    st.text(f"• {v}")
             else:
                 st.caption("None stated")
         st.markdown('<div class="output-label">Action items</div>', unsafe_allow_html=True)
         if notes.get("action_items"):
             for a in notes["action_items"]:
-                st.markdown(f"**{a['task']}**  \nOwner: {a['owner']} · Due: {a['deadline']}")
+                st.text(f"{a['task']}\nOwner: {a['owner']} · Due: {a['deadline']}")
         else:
             st.caption("No explicit tasks identified")
 
@@ -298,15 +286,12 @@ else:
 st.divider()
 with st.expander("Model, language and privacy settings", expanded=False):
     st.selectbox("Whisper model", ["tiny", "base", "small"], index=0, key="model_choice",
-                 help="Tiny runs fastest on small CPUs. Small may be slow or exceed public cloud memory.")
+                 help="Tiny runs fastest. Larger models need more memory.")
     st.selectbox("Language", list(LANGUAGES.keys()), index=0, key="language_choice",
                  help="Choose English or Bahasa Melayu if auto-detection guesses incorrectly.")
-    st.text_input("Gemini API key (kept in this browser session)", type="password", key="api_key",
-                  help="Alternatively configure GEMINI_API_KEY in Streamlit Cloud Secrets; never commit credentials to GitHub.")
-    st.text_input("Gemini model ID", value=DEFAULT_MODEL, key="gemini_model",
-                  help="Use a model available to your API key. A 503 response is temporary capacity exhaustion; retry later.")
+    st.caption(f"Summary model: {MODEL} via local Ollama.")
     st.checkbox("Generate notes automatically after stopping LOCAL recording", value=False, key="auto_notes")
-    st.caption("Record only with consent. Audio and transcripts are processed by the app server; sending a transcript to Gemini shares it with Google's API. This starter app does not persist meeting history to Supabase.")
+    st.caption("Record only with consent. This local workspace processes audio and generates notes on your computer.")
     if st.button("Clear transcript and start new meeting"):
         reset_meeting()
         st.rerun()

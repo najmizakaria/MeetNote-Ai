@@ -45,7 +45,7 @@ Do **not** add AI sparkle icons, glassmorphism, gradient heroes, shadows on ever
 ## D. Rewrite priority
 
 1. **Must fix:** Clarify local versus browser audio support; expose one obvious capture control; show meaningful errors without clearing the transcript; do not advertise browser microphone as live captions.
-2. **High impact:** Condense header, give transcript and meeting notes a stable two-column layout, move Gemini credentials into advanced settings, provide clear export actions.
+2. **High impact:** Condense header, give transcript and meeting notes a stable two-column layout, show the local summary model in Settings, provide clear export actions.
 3. **Craft:** Use 8-px controls and 12-px surfaces, 1-px functional borders, consistent type scale and responsive columns; only animate if conveying actual recording state.
 
 ## E. Pixel-specific desktop rewrite brief
