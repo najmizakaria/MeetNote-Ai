@@ -9,7 +9,7 @@ if errorlevel 1 (
     goto failed
 )
 :dependencies
-.venv\Scripts\python.exe -c "import faster_whisper, httpx, docx, sounddevice" >nul 2>&1
+.venv\Scripts\python.exe -c "import faster_whisper, httpx, docx, sounddevice; from PIL import Image, ImageTk" >nul 2>&1
 if errorlevel 1 (
     .venv\Scripts\python.exe -m pip install -r requirements-windows.txt
     if errorlevel 1 goto failed

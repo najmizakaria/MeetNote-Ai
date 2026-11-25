@@ -3,7 +3,7 @@
 - [ ] GitHub push works and `.gitignore` excludes runtime bundles and virtual environments.
 - [ ] The Windows app opens and Qwen3 is installed in Ollama.
 - [ ] Browser microphone records a 20–30 second consented test; stop then transcribe.
-- [ ] Local microphone records and the transcript updates after approx 8 seconds.
+- [ ] In the Windows app, Whisper warms up, the live draft updates during speech, and the last phrase is added after Stop.
 - [ ] Local laptop audio (Stereo Mix / VB-Cable) receives actual speaker output.
 - [ ] Local Both uses distinct input devices and picks up both voices.
 - [ ] English and Malay-language meeting scripts have their expected language set.

@@ -15,7 +15,7 @@ Whisper runs on your CPU. The Windows package includes the **Tiny** model, so th
 
 1. Enter the meeting title and date. You can also edit them after transcription.
 2. Choose **Microphone**, **Laptop audio**, or **Both**. In **Both**, select two distinct devices.
-3. Select **Start recording**, then **Stop recording** at the end. Transcription starts on roughly eight seconds of buffered audio. On a slower PC or during the model's first load, more audio may accumulate before the next update.
+3. Wait for **Whisper ready**, then select **Start recording**. **Live draft** updates while you speak. Phrases settle into the editable transcript after a pause. Select **Stop recording** and wait for the last phrase to finish. Caption speed depends on the model and your PC.
 4. To transcribe an existing recording, select **Open audio file**. WAV, MP3, M4A, and other common formats are supported.
 5. Review and edit the transcript. You can also paste a transcript directly into the editor.
 
@@ -34,6 +34,10 @@ For **Laptop audio**, use an input such as **Stereo Mix** if your Windows sound 
 To switch the Windows app to an installed model such as **gemma4:latest**, open **Settings → Summary model**, select its exact tag, and click **Save settings**. Your choice applies to the current session. Open Settings again after a new model finishes downloading so the list refreshes.
 
 If Ollama is stopped, open it and retry. If a selected model is missing, choose an installed model in Settings or download the selected tag with Ollama. Recording, transcription, and transcript export are available independently of Ollama. After the models are downloaded, the complete workflow can run offline and needs no API key.
+
+## Create a mind map
+
+In the Windows app, select **Create mind map** after recording, opening audio, or pasting a transcript. The app draws an English central topic and up to eight English branches from the current edited transcript. Use **Generate notes** separately for meeting notes in the transcript language. The app reuses a map already generated for the current transcript. Select **Save PNG** in the preview for a 1800 × 1800 image. After editing the transcript, select **Create mind map** again to update the preview.
 
 Get participants' consent before recording. Export your work before closing the app.
 

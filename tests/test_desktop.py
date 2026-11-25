@@ -4,9 +4,11 @@ from pathlib import Path
 import tkinter as tk
 
 from docx import Document
+import numpy as np
 import pytest
 
 import desktop_app as desktop
+from meetnote import live_transcription as live
 from meetnote.notes import clean_notes
 
 
@@ -37,6 +39,66 @@ def test_failed_audio_remains_available_for_retry(workspace, monkeypatch):
     assert workspace.current_transcript() == "The team agreed to test."
 
 
+def test_live_draft_is_discarded_after_stop_and_edits_survive(workspace, monkeypatch):
+    from meetnote import local_capture
+
+    class FakeCapture:
+        elapsed = 2
+        last_error = ""
+
+        def __init__(self, devices):
+            self.samples = np.ones(live.FIRST_DRAFT, dtype=np.float32)
+
+        def start(self):
+            pass
+
+        def stop(self):
+            self.samples = np.full(1600, 0.5, dtype=np.float32)
+
+        def buffered_seconds(self):
+            return len(self.samples) / live.TARGET_RATE
+
+        def drain_samples(self):
+            samples = self.samples
+            self.samples = self.samples[:0]
+            return samples
+
+    jobs = []
+
+    def start_job(name, function, *args):
+        workspace.job = name
+        jobs.append((name, args))
+
+    monkeypatch.setattr(local_capture, "LocalCapture", FakeCapture)
+    monkeypatch.setattr(live, "speech_timestamps",
+                        lambda samples: [{"start": 0, "end": len(samples)}])
+    monkeypatch.setattr(workspace, "start_job", start_job)
+    workspace.tick()
+    assert jobs[-1] == ("warmup", ("tiny",))
+    workspace.results.put(("warmup", "tiny", ""))
+    workspace.tick()
+    assert workspace.whisper_status.get() == "Whisper ready (tiny)"
+
+    workspace.devices = {"Microphone": 0}
+    workspace.mic.set("Microphone")
+    workspace.toggle_recording()
+    workspace.tick()
+    assert jobs[-1][0] == "draft"
+    workspace.transcript.insert("1.0", "My edit.")
+    workspace.toggle_recording()
+    workspace.results.put(("draft", "This draft is out of date.", ""))
+    workspace.tick()
+    name, (clip, _, _) = jobs[-1]
+    assert name == "audio"
+    assert len(clip.samples) == live.FIRST_DRAFT + 1600
+    assert clip.samples[-1] == 0.5
+    assert "out of date" not in workspace.draft_view.get("1.0", "end")
+    workspace.results.put(("audio", ("The last phrase.", "en"), ""))
+    workspace.tick()
+    assert workspace.current_transcript() == "My edit.\n\nThe last phrase."
+    assert workspace.summarize_button.instate(["!disabled"])
+
+
 def test_notes_only_export_with_matching_transcript(workspace, tmp_path, monkeypatch):
     transcript = "We agreed to test. Maya will review on Friday."
     workspace.transcript.insert("1.0", transcript)
@@ -62,6 +124,40 @@ def test_notes_only_export_with_matching_transcript(workspace, tmp_path, monkeyp
     saved = text.read_text(encoding="utf-8")
     assert "The date changed." in saved
     assert "Test the app" not in saved
+
+
+def test_english_map_keeps_notes_separate_and_blocks_saving_stale_maps(workspace, tmp_path, monkeypatch):
+    from PIL import Image
+
+    transcript = "Mira akan menguji mikrofon pada hari Khamis."
+    workspace.title.set("Ujian Mikrofon")
+    workspace.transcript.insert("1.0", transcript)
+    workspace.transcript_changed()
+    workspace.notes = clean_notes({"overview": transcript})
+    workspace.notes_source = transcript
+    assert workspace.map_button.instate(["!disabled"])
+    jobs = []
+    monkeypatch.setattr(workspace, "start_job", lambda *args: jobs.append(args))
+    workspace.map_button.invoke()
+    assert jobs == [("map", desktop.create_mind_map, transcript, "qwen3:4b")]
+
+    mind_map = {"topic": "Microphone Testing", "branches": ["Mira tests on Thursday"]}
+    workspace.notes_result(mind_map, "", show_map=True)
+    assert workspace.map_preview.topic == "Microphone Testing"
+    assert workspace.notes["overview"] == transcript
+    destination = tmp_path / "mind map.png"
+    monkeypatch.setattr(desktop.filedialog, "asksaveasfilename", lambda **_: str(destination))
+    workspace.map_preview.save_button.invoke()
+    with Image.open(destination) as png:
+        assert png.size == (1800, 1800)
+
+    workspace.map_button.invoke()
+    assert len(jobs) == 1
+    workspace.transcript.insert("end-1c", " Kami tukar hari.")
+    workspace.transcript_changed()
+    assert workspace.map_preview.save_button.instate(["disabled"])
+    workspace.map_button.invoke()
+    assert len(jobs) == 2
 
 
 

@@ -94,6 +94,26 @@ def test_long_unicode_transcript_is_split_and_notes_are_merged(monkeypatch):
     assert result["overview"].startswith("Section 1\n\nSection 2")
 
 
+def test_english_map_uses_its_own_format_and_merges_later_sections(monkeypatch):
+    def handler(request):
+        if request.url.path == "/api/show":
+            return httpx.Response(200, json={})
+        payload = json.loads(request.content)
+        assert payload["format"]["required"] == ["topic", "branches"]
+        assert "every branch in English" in payload["messages"][0]["content"]
+        transcript = payload["messages"][1]["content"]
+        return httpx.Response(200, json={"message": {"content": json.dumps({
+            "topic": "Meeting Preparation",
+            "branches": ["Microphone Test", "Choose Presenter"] if "AKHIR" in transcript else
+                        ["Microphone Test", "microphone test."],
+        })}})
+
+    requests = ollama_fixture(monkeypatch, handler)
+    result = notes.create_mind_map("Keputusan mesyuarat telah dipersetujui. " * 160 + "AKHIR")
+    assert len(requests) >= 3
+    assert result == {"topic": "Meeting Preparation", "branches": ["Microphone Test", "Choose Presenter"]}
+
+
 def test_invalid_summary_returns_an_actionable_error(monkeypatch):
     def handler(request):
         if request.url.path == "/api/show":

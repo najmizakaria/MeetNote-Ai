@@ -25,6 +25,30 @@ def transcribe_file(filename: Path, model, language: str | None = None) -> tuple
     return sentence, getattr(info, "language", None)
 
 
+def transcribe_live(samples, model, language, *, draft=False, start=0, cutoff=None):
+    from .audio import TARGET_RATE
+
+    timed = bool(start or cutoff is not None)
+    draft_options = {"temperature": 0.0} if draft else {}
+    segments, info = model.transcribe(
+        samples, language=language, beam_size=1 if draft else 3,
+        vad_filter=not draft, condition_on_previous_text=False,
+        without_timestamps=draft, word_timestamps=timed,
+        **draft_options,
+    )
+    if timed:
+        words = []
+        for segment in segments:
+            for word in segment.words or ():
+                center = (word.start + word.end) * TARGET_RATE / 2
+                if center > start and (cutoff is None or center <= cutoff):
+                    words.append(word.word)
+        sentence = "".join(words).strip()
+    else:
+        sentence = " ".join(segment.text.strip() for segment in segments if segment.text.strip())
+    return sentence, getattr(info, "language", None)
+
+
 def make_model(name: str):
     from faster_whisper import WhisperModel
     bundled_tiny = Path(__file__).resolve().parents[1] / "_models" / "tiny"

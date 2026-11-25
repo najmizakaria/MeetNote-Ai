@@ -77,6 +77,11 @@ class LocalCapture:
 
     def drain(self) -> bytes | None:
         """Consume and mix the currently available audio buffer."""
+        mixed = self.drain_samples(balance=False)
+        return wav_bytes(mixed) if len(mixed) else None
+
+    def drain_samples(self, *, balance=True) -> np.ndarray:
+        """Consume the buffer as mono 16 kHz samples for live recognition."""
         with self._lock:
             blocks = {label: self._buffers.pop(label, [])
                       for label in self.devices}
@@ -84,9 +89,15 @@ class LocalCapture:
         for label, chunks in blocks.items():
             if chunks:
                 joined = np.concatenate(chunks, axis=0)
-                tracks.append(to_mono_16k(joined, self._rates[label]))
-        mixed = mix_tracks(tracks)
-        return wav_bytes(mixed) if len(mixed) else None
+                track = to_mono_16k(joined, self._rates[label])
+                if balance:
+                    peak = float(np.max(np.abs(track), initial=0.0))
+                    # Stereo Mix level follows speaker volume. Limit mic noise amplification.
+                    limit = 24.0 if label == "laptop audio" else 2.0
+                    if 0.002 <= peak < 0.24:
+                        track *= min(limit, 0.24 / peak)
+                tracks.append(track)
+        return mix_tracks(tracks)
 
     def stop(self) -> None:
         self.active = False

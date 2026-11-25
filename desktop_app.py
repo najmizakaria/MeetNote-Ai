@@ -12,8 +12,9 @@ from threading import Thread
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from meetnote.notes import MAX_TRANSCRIPT_CHARS, MODEL, create_notes, installed_models, notes_text
-from meetnote.transcriber import LANGUAGES, make_model, transcribe_bytes, transcribe_file
+from meetnote.live_transcription import LiveClip, LiveSpeech
+from meetnote.notes import MAX_TRANSCRIPT_CHARS, MODEL, create_mind_map, create_notes, installed_models, notes_text
+from meetnote.transcriber import LANGUAGES, make_model, transcribe_file, transcribe_live
 
 
 PAPER = "#F2F6F7"
@@ -25,7 +26,8 @@ TEAL = "#176B68"
 PALE = "#E6F1EF"
 RUST = "#A73827"
 FONT = "Segoe UI"
-CHUNK_SECONDS = 8
+LIVE_POLL_SECONDS = 0.25
+DRAFT_HINT = "Draft captions appear here while you speak."
 AUDIO_TYPES = [("Audio and recordings", "*.wav *.mp3 *.m4a *.mp4 *.ogg *.opus *.flac *.webm *.aac"),
                ("All files", "*.*")]
 MODELS = ("tiny", "base", "small")
@@ -41,7 +43,65 @@ def recognize(source, language, model_name):
     model = get_model(model_name)
     if isinstance(source, Path):
         return transcribe_file(source, model, language)
-    return transcribe_bytes(source, ".wav", model, language)
+    return transcribe_live(source.samples, model, language, start=source.start, cutoff=source.cutoff)
+
+
+def recognize_draft(samples, language, model_name):
+    return transcribe_live(samples, get_model(model_name), language, draft=True)[0]
+
+
+def warm_whisper(model_name):
+    from faster_whisper.vad import get_vad_model
+    import numpy as np
+    from meetnote.audio import TARGET_RATE
+
+    model = get_model(model_name)
+    get_vad_model()
+    transcribe_live(np.zeros(TARGET_RATE // 4, dtype=np.float32), model, "en", draft=True)
+
+
+class MindMapPreview(tk.Toplevel):
+    def __init__(self, parent, image, topic, source, save):
+        super().__init__(parent)
+        self.title("Mind map · MeetNote AI")
+        self.transient(parent)
+        self.configure(bg=WHITE)
+        size = min(720, self.winfo_screenheight() - 170, self.winfo_screenwidth() - 90)
+        self.geometry(f"{size}x{size + 56}")
+        self.minsize(445, 400)
+        self.image = image
+        self.topic = topic
+        self.source = source
+        self.status = tk.StringVar(master=self, value=f"{image.width} × {image.height} PNG")
+
+        toolbar = tk.Frame(self, bg=PAPER, padx=14, pady=9)
+        toolbar.pack(side="bottom", fill="x")
+        ttk.Button(toolbar, text="Close", command=self.destroy).pack(side="right")
+        self.save_button = ttk.Button(toolbar, text="Save PNG", style="Primary.TButton", command=save)
+        self.save_button.pack(side="right", padx=(0, 8))
+        tk.Label(toolbar, textvariable=self.status, bg=PAPER, fg=INK, font=(FONT, 10),
+                 anchor="w", justify="left", wraplength=230).pack(side="left", fill="x", expand=True)
+
+        self.canvas = tk.Canvas(self, bg=WHITE, highlightthickness=0)
+        self.canvas.pack(fill="both", expand=True)
+        self.picture = self.canvas.create_image(0, 0)
+        self.canvas.bind("<Configure>", self.resize_image)
+        self.bind("<Escape>", lambda event: self.destroy())
+        self.save_button.focus_set()
+
+    def resize_image(self, event):
+        from PIL import Image, ImageTk
+
+        size = max(1, min(event.width, event.height) - 16)
+        if not hasattr(self, "preview_image") or self.preview_image.width() != size:
+            scaled = self.image.resize((size, size), Image.Resampling.LANCZOS)
+            self.preview_image = ImageTk.PhotoImage(scaled, master=self)
+            self.canvas.itemconfigure(self.picture, image=self.preview_image)
+        self.canvas.coords(self.picture, event.width / 2, event.height / 2)
+
+    def invalidate(self):
+        self.save_button.state(["disabled"])
+        self.status.set("Transcript changed. Select Create mind map again.")
 
 
 class MeetNoteApp:
@@ -59,6 +119,8 @@ class MeetNoteApp:
         root.protocol("WM_DELETE_WINDOW", self.close)
 
         self.capture = None
+        self.live = None
+        self.draft_revision = None
         self.audio = deque()
         self.results = Queue()
         self.job = None
@@ -70,6 +132,9 @@ class MeetNoteApp:
         self.capture_settings = None
         self.audio_warning = ""
         self.settings_window = None
+        self.map_preview = None
+        self.mind_map = {}
+        self.map_source = ""
 
         self.title = tk.StringVar(value="Untitled meeting")
         self.date = tk.StringVar(value=date.today().isoformat())
@@ -78,6 +143,9 @@ class MeetNoteApp:
         self.loopback = tk.StringVar()
         self.language = tk.StringVar(value="Auto detect")
         self.whisper = "tiny"
+        self.warm_model = None
+        self.warm_error = ""
+        self.whisper_status = tk.StringVar(value="Loading Whisper…")
         self.summary_model = tk.StringVar(value=MODEL)
         self.status = tk.StringVar(value="Record a meeting or open an audio file to begin.")
         self.timer = tk.StringVar(value="00:00")
@@ -197,6 +265,8 @@ class MeetNoteApp:
         self.record_button.pack(fill="x", pady=(9, 5))
         self.open_button = ttk.Button(capture, text="Open audio file…", command=self.open_audio)
         self.open_button.pack(fill="x")
+        self.label(capture, textvariable=self.whisper_status, fg=MUTED,
+                   wraplength=210, justify="left").pack(anchor="w", pady=(8, 0))
 
 
         self.label(transcript, "Transcript", size=17, bold=True).pack(anchor="w")
@@ -204,6 +274,12 @@ class MeetNoteApp:
         metadata.pack(fill="x", pady=(3, 0))
         self.field(metadata, "Meeting title", self.title)
         self.field(metadata, "Meeting date", self.date)
+        self.label(transcript, "Live draft", bold=True).pack(anchor="w", pady=(9, 3))
+        self.draft_view = tk.Text(transcript, height=2, width=1, wrap="word", borderwidth=0,
+                                  highlightthickness=0, bg=PALE, fg=INK, padx=9, pady=5,
+                                  font=(FONT, 10))
+        self.draft_view.pack(fill="x")
+        self.show_draft(DRAFT_HINT)
         self.transcript = self.editor(transcript, editable=True)
         self.transcript.bind("<<Modified>>", self.transcript_changed)
         self.placeholder = self.label(self.transcript, "Record, open audio or type here.", bg="#FAFCFC", fg=MUTED)
@@ -223,6 +299,9 @@ class MeetNoteApp:
         self.summarize_button = ttk.Button(notes, text="Generate notes", style="Primary.TButton",
                                            command=self.summarize)
         self.summarize_button.pack(fill="x", pady=(0, 8))
+        self.map_button = ttk.Button(notes, text="Create mind map",
+                                     command=lambda: self.summarize(show_map=True))
+        self.map_button.pack(fill="x", pady=(0, 8))
         exports = tk.Frame(notes, bg=WHITE)
         exports.pack(fill="x")
         exports.grid_columnconfigure((0, 1), weight=1)
@@ -239,6 +318,14 @@ class MeetNoteApp:
     def message(self, text, error=False):
         self.status.set(text)
         self.status_bar.configure(fg=RUST if error else MUTED)
+
+    def show_draft(self, text):
+        view = self.draft_view
+        view.configure(state="normal")
+        view.delete("1.0", "end")
+        view.insert("1.0", text)
+        view.configure(state="disabled")
+        view.see("end-1c")
 
     def refresh_devices(self):
         if self.capture:
@@ -273,7 +360,8 @@ class MeetNoteApp:
 
     def refresh_controls(self):
         recording = self.capture is not None
-        busy = self.job is not None
+        busy = self.job is not None or (bool(self.audio) and not self.failed)
+        warming = self.warm_model != self.whisper
         mode = self.mode.get()
         both = mode == SOURCES[2]
         if both and not self.second_device.winfo_manager():
@@ -287,9 +375,12 @@ class MeetNoteApp:
         for control in (self.mode_box, self.device_box, self.second_box):
             control.configure(state="disabled" if recording or busy else "readonly")
         self.record_button.configure(
-            text="Stop recording" if recording else ("Retry audio" if self.failed else "Start recording"),
+            text=("Stop recording" if recording else "Retry audio" if self.failed else
+                  "Retry Whisper" if self.warm_error and not warming else "Start recording"),
             style="Danger.TButton" if recording else "Primary.TButton",
-            state="normal" if recording or (not busy and (self.failed or self.devices)) else "disabled",
+            state="normal" if recording or (
+                not busy and (self.failed or (not warming and (self.devices or self.warm_error)))
+            ) else "disabled",
         )
         self.open_button.configure(state="disabled" if recording or busy else "normal")
         self.refresh_button.configure(state="disabled" if recording or busy else "normal")
@@ -298,6 +389,7 @@ class MeetNoteApp:
         has_text = bool(transcript)
         can_summarize = has_text and not recording and not busy
         self.summarize_button.configure(state="normal" if can_summarize else "disabled")
+        self.map_button.configure(state="normal" if can_summarize else "disabled")
         for control in (self.txt_button, self.docx_button):
             control.configure(state="normal" if has_text else "disabled")
 
@@ -311,6 +403,11 @@ class MeetNoteApp:
             self.audio = deque((source, language, self.whisper) for source, _, _ in self.audio)
             self.failed = False
             self.start_audio_job()
+            return
+        if self.warm_model != self.whisper or self.job:
+            return
+        if self.warm_error:
+            self.start_whisper_warmup()
             return
 
         try:
@@ -332,30 +429,40 @@ class MeetNoteApp:
             self.message(f"Recording could not start. {describe(error)}", error=True)
             return
         self.capture = capture
+        self.live = LiveSpeech()
         self.capture_settings = (LANGUAGES[self.language.get()], self.whisper)
         self.audio_warning = ""
         self.timer.set("00:00")
         self.capture_label.set("Recording live")
         self.meter_status.configure(fg="#FFB7A5")
-        self.message("Recording. Whisper processes audio in sections as it becomes available.")
+        self.show_draft("Listening for speech…")
+        self.message("Recording. Draft captions update while you speak.")
         self.refresh_controls()
 
     def enqueue_recording(self):
         try:
-            audio = self.capture.drain()
-            if audio:
-                self.audio.append((audio, *self.capture_settings))
+            samples = self.capture.drain_samples()
+            clip = self.live.add(samples) if len(samples) else None
         except Exception as error:
             self.audio_warning = f"Audio could not be read. {describe(error)}"
+            clip = self.live.finish()
+        if clip is not None:
+            self.audio.append((clip, *self.capture_settings))
+            self.show_draft("Finalizing phrase…")
 
     def stop_capture(self):
         self.capture.stop()
         self.enqueue_recording()
+        tail = self.live.finish()
+        if tail is not None:
+            self.audio.append((tail, *self.capture_settings))
         if self.capture.last_error and not self.audio_warning:
             self.audio_warning = f"Audio device reported {self.capture.last_error}. Check for missing speech."
         self.capture = None
+        self.live = None
         self.capture_label.set("Recording stopped")
         self.meter_status.configure(fg="#BCE1DB")
+        self.show_draft("Finishing transcript…" if self.audio and not self.failed else DRAFT_HINT)
         if self.audio_warning:
             self.message(self.audio_warning, error=True)
         elif not self.audio:
@@ -394,11 +501,26 @@ class MeetNoteApp:
         if self.job or not self.audio or self.failed:
             return
         source, language, model = self.audio[0]
-        label = source.name if isinstance(source, Path) else "recorded audio"
-        self.message(f"Transcribing {label}. This can take a moment.")
+        if isinstance(source, Path):
+            self.message(f"Transcribing {source.name}. This can take a moment.")
+        elif not self.capture:
+            self.message("Finishing the recorded audio…")
         self.start_job("audio", recognize, source, language, model)
 
+    def start_whisper_warmup(self):
+        self.warm_model = self.whisper
+        self.warm_error = ""
+        self.whisper_status.set(f"Loading Whisper ({self.whisper})…")
+        self.start_job("warmup", warm_whisper, self.whisper)
+
     def tick(self):
+        if self.capture:
+            elapsed = int(self.capture.elapsed)
+            minutes, seconds = divmod(elapsed, 60)
+            self.timer.set(f"{minutes:02d}:{seconds:02d}")
+            if self.capture.buffered_seconds() >= LIVE_POLL_SECONDS:
+                self.enqueue_recording()
+
         try:
             name, value, error = self.results.get_nowait()
         except Empty:
@@ -407,16 +529,30 @@ class MeetNoteApp:
             self.job = None
             if name == "audio":
                 self.audio_result(value, error)
-            else:
-                self.notes_result(value, error)
+            elif name in ("notes", "map"):
+                self.notes_result(value, error, show_map=name == "map")
+            elif name == "draft":
+                if value and self.live and self.draft_revision == self.live.revision:
+                    self.show_draft(value)
+            elif name == "warmup":
+                if error:
+                    self.warm_error = error
+                    self.whisper_status.set(f"Whisper ({self.warm_model}) could not load")
+                    if self.warm_model == self.whisper:
+                        self.message(f"Whisper could not load. {error}", error=True)
+                else:
+                    self.whisper_status.set(f"Whisper ready ({self.warm_model})")
             self.refresh_controls()
-        if self.capture:
-            elapsed = int(self.capture.elapsed)
-            minutes, seconds = divmod(elapsed, 60)
-            self.timer.set(f"{minutes:02d}:{seconds:02d}")
-            if not self.job and self.capture.buffered_seconds() >= CHUNK_SECONDS:
-                self.enqueue_recording()
-                self.start_audio_job()
+        if not self.job:
+            self.start_audio_job()
+            if not self.job:
+                if self.live:
+                    draft = self.live.draft()
+                    if draft is not None:
+                        self.draft_revision = self.live.revision
+                        self.start_job("draft", recognize_draft, draft, *self.capture_settings)
+                elif self.warm_model != self.whisper:
+                    self.start_whisper_warmup()
         self.root.after(100, self.tick)
 
     def audio_result(self, value, error):
@@ -426,7 +562,7 @@ class MeetNoteApp:
                 self.stop_capture()
             self.message(f"Transcription failed. {error} Use Retry audio or open another file.", error=True)
             return
-        self.audio.popleft()
+        source, _, _ = self.audio.popleft()
         sentence, language = value
         if sentence:
             if self.current_transcript():
@@ -437,13 +573,18 @@ class MeetNoteApp:
             self.language_label = {code: name for name, code in LANGUAGES.items()}.get(language, language or "")
             self.transcript_changed()
         if self.audio:
-            self.start_audio_job()
-        elif self.audio_warning:
+            return
+        if self.capture:
+            self.show_draft("Listening for speech…")
+        else:
+            self.show_draft(DRAFT_HINT)
+        if self.audio_warning:
             self.message(self.audio_warning, error=True)
         elif self.capture:
             self.message("Recording. Transcript updated." if sentence else "Recording. No clear speech in the last section.")
         else:
-            self.message("Transcription complete." if sentence else "No clear speech in this audio section.")
+            has_speech = sentence or (isinstance(source, LiveClip) and self.current_transcript())
+            self.message("Transcription complete." if has_speech else "No clear speech in this audio section.")
 
     def current_transcript(self):
         return self.transcript.get("1.0", "end-1c").strip() if hasattr(self, "transcript") else ""
@@ -466,6 +607,9 @@ class MeetNoteApp:
         if self.notes is not None and self.current_transcript() != self.notes_source:
             self.notes = None
             self.render_notes("The transcript changed. Generate notes again.")
+        if self.map_preview and self.map_preview.winfo_exists():
+            if self.map_preview.source != self.current_transcript():
+                self.map_preview.invalidate()
         self.refresh_controls()
 
     def settings(self):
@@ -512,25 +656,35 @@ class MeetNoteApp:
         window.bind("<Escape>", lambda event: window.destroy())
         window.focus_set()
 
-    def summarize(self):
+    def summarize(self, *, show_map=False):
         source = self.current_transcript()
         if not source or self.capture or self.job:
+            return
+        if show_map and self.map_source == source and self.mind_map.get("branches"):
+            self.open_mind_map()
             return
         if len(source) > MAX_TRANSCRIPT_CHARS:
             self.message("This transcript exceeds 60,000 characters. Summarize it in smaller sections.", error=True)
             return
         self.job_source = source
         model = self.summary_model.get()
-        self.message(f"Generating notes locally with {model}. Longer transcripts may take a few minutes.")
-        self.start_job("notes", create_notes, source, model)
+        purpose = "a mind map" if show_map else "notes"
+        self.message(f"Generating {purpose} locally with {model}. Longer transcripts may take a few minutes.")
+        self.start_job("map" if show_map else "notes", create_mind_map if show_map else create_notes,
+                       source, model)
 
-    def notes_result(self, value, error):
+    def notes_result(self, value, error, *, show_map=False):
         if error:
-            if self.notes is None:
+            if self.notes is None and not show_map:
                 self.render_notes("Notes unavailable. See the status below for the next step.")
             self.message(f"{error} Your transcript is available.", error=True)
         elif self.current_transcript() != self.job_source:
-            self.message("The transcript changed while notes were being generated. Generate notes again.", error=True)
+            purpose = "the mind map" if show_map else "notes"
+            self.message(f"The transcript changed during generation. Try creating {purpose} again.", error=True)
+        elif show_map:
+            self.mind_map = value
+            self.map_source = self.job_source
+            self.open_mind_map()
         else:
             self.notes = value
             self.notes_source = self.job_source
@@ -538,6 +692,44 @@ class MeetNoteApp:
             model = value.get("model") or self.summary_model.get()
             self.message(f"Meeting notes ready from {model}. Review decisions and deadlines before sharing.")
         self.job_source = None
+
+    def open_mind_map(self):
+        from meetnote.mind_map import render_mind_map
+
+        source = self.current_transcript()
+        topic = self.mind_map.get("topic") or "Meeting Summary"
+        branches = self.mind_map.get("branches")
+        if not branches:
+            self.message("No distinct points were found for a mind map. Add more detail to the transcript.", error=True)
+            return
+        try:
+            image = render_mind_map(topic, branches)
+        except (OSError, ValueError) as error:
+            self.message(f"Could not draw the mind map. {describe(error)}", error=True)
+            return
+        if self.map_preview and self.map_preview.winfo_exists():
+            self.map_preview.destroy()
+        self.map_preview = MindMapPreview(self.root, image, topic, source, self.save_mind_map)
+        self.message("Mind map ready. Select Save PNG to export it.")
+
+    def save_mind_map(self):
+        preview = self.map_preview
+        if preview.source != self.current_transcript():
+            preview.invalidate()
+            return
+        filename = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "", preview.topic).strip(" .")[:80] or "Meeting"
+        destination = filedialog.asksaveasfilename(
+            parent=preview, title="Save mind map", initialfile=f"{filename} mind map.png",
+            defaultextension=".png", filetypes=[("PNG image", "*.png")],
+        )
+        if destination:
+            try:
+                preview.image.save(destination, format="PNG")
+            except OSError as error:
+                preview.status.set(f"Could not save PNG. {describe(error)}")
+            else:
+                preview.status.set("Mind map saved.")
+                self.message(f"Saved {Path(destination).name}.")
 
     def render_notes(self, hint="Add a transcript, then select Generate notes."):
         view = self.note_view
@@ -596,6 +788,8 @@ class MeetNoteApp:
         self.failed = False
         self.notes = None
         self.notes_source = ""
+        self.mind_map = {}
+        self.map_source = ""
         self.language_label = ""
         self.audio_warning = ""
         self.transcript.delete("1.0", "end")
@@ -609,7 +803,7 @@ class MeetNoteApp:
         self.message("New meeting ready.")
 
     def close(self):
-        if (self.capture or self.job or self.audio or self.current_transcript()) and not messagebox.askyesno(
+        if (self.capture or self.job in ("audio", "notes", "map") or self.audio or self.current_transcript()) and not messagebox.askyesno(
             "Close MeetNote AI?", "The current session will close. Saved exports remain on your computer.",
             parent=self.root,
         ):
