@@ -52,7 +52,7 @@ button {transition:background-color .12s ease,border-color .12s ease!important}
 
 
 @st.cache_resource(show_spinner="Loading Whisper speech recognition model…")
-def cached_model(model_name: str):
+def cached_transcription_model(model_name: str):
     return make_model(model_name)
 
 
@@ -63,6 +63,8 @@ def init_state():
     for key, value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = value
+    if "language_choice" in st.session_state and st.session_state.language_choice not in LANGUAGES:
+        st.session_state.language_choice = next(iter(LANGUAGES))
 
 
 def transcript() -> str:
@@ -74,7 +76,7 @@ def transcribe_clip(payload: bytes, ext: str, model_name: str, language: str | N
         return False
     try:
         with st.spinner("Transcribing audio using Whisper…"):
-            text, lang = transcribe_bytes(payload, ext, cached_model(model_name), language)
+            text, lang = transcribe_bytes(payload, ext, cached_transcription_model(model_name), language)
         if not text:
             st.session_state.message = "No clear speech detected in this segment. Try another device or speak closer to the microphone."
             return False
@@ -298,7 +300,7 @@ with st.expander("Model, language and privacy settings", expanded=False):
     st.selectbox("Whisper model", ["tiny", "base", "small"], index=0, key="model_choice",
                  help="Tiny runs fastest. Larger models need more memory.")
     st.selectbox("Language", list(LANGUAGES.keys()), index=0, key="language_choice",
-                 help="Choose English or Bahasa Melayu if auto-detection guesses incorrectly.")
+                 help="Auto detect chooses between English and Bahasa Melayu.")
     st.caption(f"Summary model: {MODEL} via local Ollama.")
     st.checkbox("Generate notes automatically after stopping LOCAL recording", value=False, key="auto_notes")
     st.caption("Record only with consent. This local workspace processes audio and generates notes on your computer.")

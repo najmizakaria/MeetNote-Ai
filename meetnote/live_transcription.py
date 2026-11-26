@@ -10,10 +10,9 @@ from .audio import TARGET_RATE
 
 CONTEXT = int(0.48 * TARGET_RATE)
 PAUSE = int(0.55 * TARGET_RATE)
-FIRST_DRAFT = int(0.95 * TARGET_RATE)
-DRAFT_INTERVAL = TARGET_RATE
-DRAFT_WINDOW = 5 * TARGET_RATE
-MAX_PHRASE = 20 * TARGET_RATE
+FIRST_DRAFT = int(0.75 * TARGET_RATE)
+DRAFT_INTERVAL = int(0.75 * TARGET_RATE)
+MAX_PHRASE = 8 * TARGET_RATE
 
 
 @dataclass
@@ -79,7 +78,7 @@ class LiveSpeech:
         if self.speech_end is None or len(self.pending) < self.next_draft:
             return None
         self.next_draft = len(self.pending) + DRAFT_INTERVAL
-        return self.pending[-DRAFT_WINDOW:]
+        return self.pending
 
     def finish(self):
         if len(self.pending):

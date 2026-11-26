@@ -100,7 +100,7 @@ def test_draft_refresh_never_consumes_audio_and_stop_preserves_last_phrase(monke
 
     seconds = np.full(live.DRAFT_INTERVAL * 6, 0.5, dtype=np.float32)
     assert speech.add(seconds) is None
-    np.testing.assert_array_equal(speech.draft(), seconds[-live.DRAFT_WINDOW:])
+    np.testing.assert_array_equal(speech.draft(), np.concatenate((first, seconds)))
     np.testing.assert_array_equal(speech.finish().samples, np.concatenate((first, seconds)))
     assert speech.finish() is None
 
