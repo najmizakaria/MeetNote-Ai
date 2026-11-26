@@ -4,6 +4,30 @@ import tempfile
 from pathlib import Path
 
 LANGUAGES = {"Auto detect": None, "English": "en", "Bahasa Melayu": "ms", "Indonesian": "id"}
+ALLOWED_LANGUAGES = frozenset(code for code in LANGUAGES.values() if code)
+
+
+def _detect_allowed_language(model, audio, *, vad_filter: bool) -> str | None:
+    if audio is None or len(audio) == 0:
+        return None
+    if vad_filter:
+        from faster_whisper.vad import VadOptions, collect_chunks, get_speech_timestamps
+
+        speech_chunks = get_speech_timestamps(audio, VadOptions(min_silence_duration_ms=160))
+        if not speech_chunks:
+            return None
+        import numpy as np
+
+        audio_chunks, _ = collect_chunks(audio, speech_chunks)
+        audio = np.concatenate(audio_chunks, axis=0)
+
+    _, _, all_language_probs = model.detect_language(audio=audio)
+    best_language = max(
+        ((lang, prob) for lang, prob in all_language_probs if lang in ALLOWED_LANGUAGES),
+        key=lambda item: item[1],
+        default=(None, 0.0),
+    )[0]
+    return best_language or "en"
 
 
 def transcribe_bytes(data: bytes, suffix: str, model, language: str | None = None) -> tuple[str, str | None]:
@@ -17,8 +41,17 @@ def transcribe_bytes(data: bytes, suffix: str, model, language: str | None = Non
 
 
 def transcribe_file(filename: Path, model, language: str | None = None) -> tuple[str, str | None]:
+    audio_input: str | object = str(filename)
+    if language is None and hasattr(model, "detect_language"):
+        from faster_whisper.audio import decode_audio
+
+        audio_input = decode_audio(str(filename))
+        language = _detect_allowed_language(model, audio_input, vad_filter=True)
+        if language is None:
+            return "", None
+
     segments, info = model.transcribe(
-        str(filename), language=language, beam_size=3,
+        audio_input, language=language, beam_size=3,
         vad_filter=True, condition_on_previous_text=False,
     )
     sentence = " ".join(s.text.strip() for s in segments if s.text.strip())
@@ -27,6 +60,11 @@ def transcribe_file(filename: Path, model, language: str | None = None) -> tuple
 
 def transcribe_live(samples, model, language, *, draft=False, start=0, cutoff=None):
     from .audio import TARGET_RATE
+
+    if language is None and hasattr(model, "detect_language"):
+        language = _detect_allowed_language(model, samples, vad_filter=not draft)
+        if language is None:
+            return "", None
 
     timed = bool(start or cutoff is not None)
     draft_options = {"temperature": 0.0} if draft else {}
