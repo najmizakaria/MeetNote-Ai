@@ -260,6 +260,8 @@ class MeetNoteApp:
         self.second_device = tk.Frame(capture, bg=WHITE)
         self.second_box = self.field(self.second_device, "Laptop audio input", self.loopback, ())
 
+        self.source_button = ttk.Button(capture, text="Apply audio source", command=self.switch_audio_source)
+        self.source_error = self.label(capture, fg=RUST, wraplength=210, justify="left")
         self.record_button = ttk.Button(capture, text="Start recording", style="Primary.TButton",
                                         command=self.toggle_recording)
         self.record_button.pack(fill="x", pady=(9, 5))
@@ -365,7 +367,8 @@ class MeetNoteApp:
         mode = self.mode.get()
         both = mode == SOURCES[2]
         if both and not self.second_device.winfo_manager():
-            self.second_device.pack(before=self.record_button, fill="x")
+            before = self.source_button if self.source_button.winfo_manager() else self.record_button
+            self.second_device.pack(before=before, fill="x")
         elif not both:
             self.second_device.pack_forget()
         variable = self.loopback if mode == SOURCES[1] else self.mic
@@ -373,7 +376,12 @@ class MeetNoteApp:
             self.device_box.configure(textvariable=variable)
 
         for control in (self.mode_box, self.device_box, self.second_box):
-            control.configure(state="disabled" if recording or busy else "readonly")
+            control.configure(state="readonly" if recording or not busy else "disabled")
+        if recording and not self.source_button.winfo_manager():
+            self.source_button.pack(before=self.record_button, fill="x", pady=(8, 0))
+        elif not recording:
+            self.source_button.pack_forget()
+            self.source_error.pack_forget()
         self.record_button.configure(
             text=("Stop recording" if recording else "Retry audio" if self.failed else
                   "Retry Whisper" if self.warm_error and not warming else "Start recording"),
@@ -392,6 +400,32 @@ class MeetNoteApp:
         self.map_button.configure(state="normal" if can_summarize else "disabled")
         for control in (self.txt_button, self.docx_button):
             control.configure(state="normal" if has_text else "disabled")
+
+    def selected_devices(self):
+        mode = self.mode.get()
+        devices = {}
+        if mode in (SOURCES[0], SOURCES[2]):
+            if self.mic.get() not in self.devices:
+                raise ValueError("Choose a microphone input device.")
+            devices["microphone"] = self.devices[self.mic.get()]
+        if mode in (SOURCES[1], SOURCES[2]):
+            if self.loopback.get() not in self.devices:
+                raise ValueError("Select a laptop-audio input such as Stereo Mix or CABLE Output.")
+            devices["laptop audio"] = self.devices[self.loopback.get()]
+        return devices
+
+    def switch_audio_source(self):
+        if not self.capture:
+            return
+        try:
+            self.capture.switch_devices(self.selected_devices())
+        except Exception as error:
+            self.source_error.configure(text=f"Could not switch audio. {describe(error)[:140]}")
+            self.source_error.pack(after=self.open_button, fill="x", pady=(5, 0))
+            return
+        self.source_error.pack_forget()
+        self.capture_label.set(f"Recording · {self.mode.get()}")
+        self.message("Audio source applied. Recording continues.")
 
     def toggle_recording(self):
         if self.capture:
@@ -413,17 +447,7 @@ class MeetNoteApp:
         try:
             from meetnote.local_capture import LocalCapture
 
-            mode = self.mode.get()
-            devices = {}
-            if mode in (SOURCES[0], SOURCES[2]):
-                if self.mic.get() not in self.devices:
-                    raise ValueError("Choose a microphone input device.")
-                devices["microphone"] = self.devices[self.mic.get()]
-            if mode in (SOURCES[1], SOURCES[2]):
-                if self.loopback.get() not in self.devices:
-                    raise ValueError("Select a laptop-audio input such as Stereo Mix or CABLE Output.")
-                devices["laptop audio"] = self.devices[self.loopback.get()]
-            capture = LocalCapture(devices)
+            capture = LocalCapture(self.selected_devices())
             capture.start()
         except Exception as error:
             self.message(f"Recording could not start. {describe(error)}", error=True)
@@ -433,7 +457,7 @@ class MeetNoteApp:
         self.capture_settings = (LANGUAGES[self.language.get()], self.whisper)
         self.audio_warning = ""
         self.timer.set("00:00")
-        self.capture_label.set("Recording live")
+        self.capture_label.set(f"Recording · {self.mode.get()}")
         self.meter_status.configure(fg="#FFB7A5")
         self.show_draft("Listening for speech…")
         self.message("Recording. Draft captions update while you speak.")

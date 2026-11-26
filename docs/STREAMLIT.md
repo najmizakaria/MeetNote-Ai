@@ -20,7 +20,7 @@ The portable Windows project includes the Tiny Whisper model. A fresh source che
 ## Capture and generate notes
 
 - **Browser microphone** records a clip, then transcribes it after you stop. Allow microphone access when the browser asks.
-- **Local audio devices** captures a microphone, a system audio input such as Stereo Mix, or both. Whisper updates as audio sections finish.
+- **Local audio devices** captures a microphone, a system audio input such as Stereo Mix, or both. To switch during recording, choose the new inputs and select **Apply audio source**. Whisper updates as audio sections finish.
 - **Upload audio** transcribes an existing recording.
 - Edit the transcript, choose **Generate AI meeting notes**, and check the results. Download the output as TXT, Word, or plain transcript.
 

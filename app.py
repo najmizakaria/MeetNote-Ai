@@ -157,11 +157,12 @@ with st.container(border=True):
         except Exception as exc:
             devices = []
             st.warning(f"Local audio recording unavailable: {exc}. Install requirements-local.txt and run on Windows.")
+        capture = st.session_state.capture
+        names = {d["index"]: f'{d["name"]} · {d["rate"]} Hz' for d in devices}
         if not devices:
             st.info("No audio inputs found. To use this mode, run locally with a connected microphone or virtual audio cable.")
         else:
-            ids = [d["index"] for d in devices]
-            names = {d["index"]: f'{d["name"]} · {d["rate"]} Hz' for d in devices}
+            ids = list(names)
             kind = st.radio("Capture from", ["Microphone", "Laptop audio", "Both"], horizontal=True)
             selected = {}
             if kind in ("Microphone", "Both"):
@@ -172,48 +173,57 @@ with st.container(border=True):
                 selected["laptop"] = st.selectbox("Laptop / loopback input device", ids,
                     index=best, format_func=lambda x: names[x])
                 st.caption("Windows: play a meeting through VB-Cable and choose 'CABLE Output' here, or enable Stereo Mix in Windows Sound settings.")
-            capture = st.session_state.capture
-            if not (capture and capture.active):
-                if st.button("Start local live recording", type="primary", use_container_width=False):
+            if capture and capture.active:
+                if st.button("Apply audio source", disabled=selected == capture.devices):
                     try:
-                        capture = LocalCapture(selected)
-                        capture.start()
-                        st.session_state.capture = capture
-                        st.session_state.message = "Recording. Transcript updates approximately every 8 seconds."
-                        st.rerun()
+                        capture.switch_devices(selected)
                     except Exception as exc:
-                        st.error(f"Recording failed: {exc}")
+                        st.error(f"Could not switch audio. {exc}")
+                    else:
+                        st.success("Audio source applied. Recording continues.")
+            elif st.button("Start local live recording", type="primary", use_container_width=False):
+                try:
+                    capture = LocalCapture(selected)
+                    capture.start()
+                    st.session_state.capture = capture
+                    st.session_state.message = "Recording. Transcript updates approximately every 8 seconds."
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Recording failed: {exc}")
 
-            @st.fragment(run_every="2s")
-            def live_monitor():
-                rec = st.session_state.get("capture")
-                if rec and rec.active:
-                    st.markdown('<div class="live-track recording"><span class="signal">●</span>'
-                                '<span class="live-label">RECORDING LIVE · processing 8-second audio chunks</span></div>',
-                                unsafe_allow_html=True)
-                    st.caption(f"Elapsed: {int(rec.elapsed)} seconds · buffered: {rec.buffered_seconds():.1f} seconds")
-                    if rec.buffered_seconds() >= 8:
-                        data = rec.drain()
-                        if data:
-                            transcribe_clip(data, ".wav", st.session_state.model_choice,
-                                            LANGUAGES[st.session_state.language_choice])
-                    if st.button("Stop and transcribe remainder", type="primary", key="stop_local"):
-                        rec.stop()
-                        data = rec.drain()
-                        if data:
-                            transcribe_clip(data, ".wav", st.session_state.model_choice,
-                                            LANGUAGES[st.session_state.language_choice])
-                        if st.session_state.auto_notes and transcript().strip():
-                            summarize_current()
-                        st.rerun()
-                    if st.session_state.segments:
-                        st.markdown("**Live transcript so far**")
-                        st.text(transcript())
-                    if rec.last_error:
-                        st.warning(f"Audio device warning: {rec.last_error}")
-                elif rec:
-                    st.caption("Local recording stopped.")
-            live_monitor()
+        @st.fragment(run_every="2s")
+        def live_monitor():
+            rec = st.session_state.get("capture")
+            if rec and rec.active:
+                st.markdown('<div class="live-track recording"><span class="signal">●</span>'
+                            '<span class="live-label">RECORDING LIVE · processing 8-second audio chunks</span></div>',
+                            unsafe_allow_html=True)
+                active_sources = ", ".join(names.get(device_id, f"Input {device_id}")
+                                           for device_id in rec.devices.values())
+                st.caption(f"Recording from {active_sources}")
+                st.caption(f"Elapsed: {int(rec.elapsed)} seconds · buffered: {rec.buffered_seconds():.1f} seconds")
+                if rec.buffered_seconds() >= 8:
+                    data = rec.drain()
+                    if data:
+                        transcribe_clip(data, ".wav", st.session_state.model_choice,
+                                        LANGUAGES[st.session_state.language_choice])
+                if st.button("Stop and transcribe remainder", type="primary", key="stop_local"):
+                    rec.stop()
+                    data = rec.drain()
+                    if data:
+                        transcribe_clip(data, ".wav", st.session_state.model_choice,
+                                        LANGUAGES[st.session_state.language_choice])
+                    if st.session_state.auto_notes and transcript().strip():
+                        summarize_current()
+                    st.rerun()
+                if st.session_state.segments:
+                    st.markdown("**Live transcript so far**")
+                    st.text(transcript())
+                if rec.last_error:
+                    st.warning(f"Audio device warning: {rec.last_error}")
+            elif rec:
+                st.caption("Local recording stopped.")
+        live_monitor()
 
 st.markdown('<div class="section-tag">02 / Transcript & meeting notes</div>', unsafe_allow_html=True)
 left, right = st.columns([1.12, 1], gap="large")

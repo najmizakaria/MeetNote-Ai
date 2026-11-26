@@ -39,7 +39,7 @@ def test_failed_audio_remains_available_for_retry(workspace, monkeypatch):
     assert workspace.current_transcript() == "The team agreed to test."
 
 
-def test_live_draft_is_discarded_after_stop_and_edits_survive(workspace, monkeypatch):
+def test_source_switch_preserves_the_live_session_and_transcript_edits(workspace, monkeypatch):
     from meetnote import local_capture
 
     class FakeCapture:
@@ -47,10 +47,14 @@ def test_live_draft_is_discarded_after_stop_and_edits_survive(workspace, monkeyp
         last_error = ""
 
         def __init__(self, devices):
+            self.devices = devices
             self.samples = np.ones(live.FIRST_DRAFT, dtype=np.float32)
 
         def start(self):
             pass
+
+        def switch_devices(self, devices):
+            self.devices = devices
 
         def stop(self):
             self.samples = np.full(1600, 0.5, dtype=np.float32)
@@ -79,11 +83,29 @@ def test_live_draft_is_discarded_after_stop_and_edits_survive(workspace, monkeyp
     workspace.tick()
     assert workspace.whisper_status.get() == "Whisper ready (tiny)"
 
-    workspace.devices = {"Microphone": 0}
+    workspace.devices = {"Microphone": 0, "Stereo Mix": 1}
     workspace.mic.set("Microphone")
     workspace.toggle_recording()
     workspace.tick()
     assert jobs[-1][0] == "draft"
+    capture, live_session = workspace.capture, workspace.live
+    assert workspace.mode_box.instate(["readonly"])
+    workspace.mode.set("Both")
+    workspace.refresh_controls()
+    assert workspace.second_box.instate(["readonly"])
+    assert workspace.second_device.winfo_manager() == "pack"
+    workspace.mode.set("Laptop audio")
+    workspace.refresh_controls()
+    workspace.source_button.invoke()
+    assert workspace.source_error.winfo_manager() == "pack"
+    assert capture.devices == {"microphone": 0}
+    assert workspace.capture_label.get() == "Recording · Microphone"
+    workspace.loopback.set("Stereo Mix")
+    workspace.source_button.invoke()
+    assert workspace.source_error.winfo_manager() == ""
+    assert workspace.capture is capture and workspace.live is live_session
+    assert capture.devices == {"laptop audio": 1}
+    assert workspace.capture_label.get() == "Recording · Laptop audio"
     workspace.transcript.insert("1.0", "My edit.")
     workspace.toggle_recording()
     workspace.results.put(("draft", "This draft is out of date.", ""))

@@ -15,7 +15,7 @@ Whisper runs on your CPU. The Windows package includes the **Tiny** model, so th
 
 1. Enter the meeting title and date. You can also edit them after transcription.
 2. Choose **Microphone**, **Laptop audio**, or **Both**. In **Both**, select two distinct devices.
-3. Wait for **Whisper ready**, then select **Start recording**. **Live draft** updates while you speak. Phrases settle into the editable transcript after a pause. Select **Stop recording** and wait for the last phrase to finish. Caption speed depends on the model and your PC.
+3. Wait for **Whisper ready**, then select **Start recording**. **Live draft** updates while you speak. Phrases settle into the editable transcript after a pause. To switch inputs during the recording, choose the new source and devices, then select **Apply audio source**. Select **Stop recording** and wait for the last phrase to finish. Caption speed depends on the model and your PC.
 4. To transcribe an existing recording, select **Open audio file**. WAV, MP3, M4A, and other common formats are supported.
 5. Review and edit the transcript. You can also paste a transcript directly into the editor.
 
