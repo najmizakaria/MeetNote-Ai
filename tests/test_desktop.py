@@ -2,6 +2,7 @@
 import io
 from pathlib import Path
 import tkinter as tk
+from types import SimpleNamespace
 
 from docx import Document
 import numpy as np
@@ -119,6 +120,39 @@ def test_source_switch_preserves_the_live_session_and_transcript_edits(workspace
     workspace.tick()
     assert workspace.current_transcript() == "My edit.\n\nThe last phrase."
     assert workspace.summarize_button.instate(["!disabled"])
+
+
+def test_live_draft_appears_inside_transcript_until_phrase_is_finalized(workspace, monkeypatch):
+    def detect(samples):
+        voiced = np.flatnonzero(samples)
+        return [{"start": voiced[0], "end": voiced[-1] + 1}] if len(voiced) else []
+
+    monkeypatch.setattr(live, "speech_timestamps", detect)
+    monkeypatch.setattr(workspace, "start_job", lambda name, *args: setattr(workspace, "job", name))
+    workspace.capture = SimpleNamespace(elapsed=1, buffered_seconds=lambda: 0)
+    workspace.live = live.LiveSpeech()
+    workspace.capture_settings = ("en", "tiny")
+    workspace.transcript.insert("1.0", "Earlier speech.")
+    workspace.capture.drain_samples = lambda: np.ones(live.FIRST_DRAFT, dtype=np.float32)
+    workspace.enqueue_recording()
+    workspace.tick()
+    assert workspace.job == "draft"
+
+    workspace.capture.drain_samples = lambda: np.zeros(live.PAUSE, dtype=np.float32)
+    workspace.enqueue_recording()
+    workspace.results.put(("draft", "The next", ""))
+    workspace.tick()
+    assert workspace.job == "audio"
+    assert workspace.draft_view.master == workspace.transcript.master
+    assert workspace.draft_view.winfo_manager() == "grid"
+    assert workspace.draft_view.get("1.0", "end-1c") == "The next"
+    assert workspace.current_transcript() == "Earlier speech."
+
+    workspace.results.put(("audio", ("The next phrase.", "en"), ""))
+    workspace.tick()
+    assert workspace.draft_view.winfo_manager() == ""
+    assert workspace.current_transcript() == "Earlier speech.\n\nThe next phrase."
+    assert workspace.draft_status.get() == desktop.LISTENING
 
 
 def test_notes_only_export_with_matching_transcript(workspace, tmp_path, monkeypatch):

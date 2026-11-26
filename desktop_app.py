@@ -28,6 +28,7 @@ RUST = "#A73827"
 FONT = "Segoe UI"
 LIVE_POLL_SECONDS = 0.25
 DRAFT_HINT = "Draft captions appear here while you speak."
+LISTENING = "Listening for speech…"
 AUDIO_TYPES = [("Audio and recordings", "*.wav *.mp3 *.m4a *.mp4 *.ogg *.opus *.flac *.webm *.aac"),
                ("All files", "*.*")]
 MODELS = ("tiny", "base", "small")
@@ -151,6 +152,7 @@ class MeetNoteApp:
         self.timer = tk.StringVar(value="00:00")
         self.capture_label = tk.StringVar(value="Ready to record")
         self.transcript_label = tk.StringVar(value="0 words")
+        self.draft_status = tk.StringVar(value=DRAFT_HINT)
         self.language_label = ""
 
         self.style()
@@ -208,8 +210,10 @@ class MeetNoteApp:
                          undo=editable, font=(FONT, 11), tabs=("16p",))
         scrollbar = ttk.Scrollbar(frame, orient="vertical", command=editor.yview)
         editor.configure(yscrollcommand=scrollbar.set)
-        scrollbar.pack(side="right", fill="y")
-        editor.pack(side="left", fill="both", expand=True)
+        frame.grid_columnconfigure(0, weight=1)
+        frame.grid_rowconfigure(1, weight=1)
+        editor.grid(row=1, column=0, sticky="nsew")
+        scrollbar.grid(row=1, column=1, sticky="ns")
         return editor
 
     def layout(self):
@@ -277,12 +281,12 @@ class MeetNoteApp:
         self.field(metadata, "Meeting title", self.title)
         self.field(metadata, "Meeting date", self.date)
         self.label(transcript, "Live draft", bold=True).pack(anchor="w", pady=(9, 3))
-        self.draft_view = tk.Text(transcript, height=2, width=1, wrap="word", borderwidth=0,
-                                  highlightthickness=0, bg=PALE, fg=INK, padx=9, pady=5,
-                                  font=(FONT, 10))
-        self.draft_view.pack(fill="x")
-        self.show_draft(DRAFT_HINT)
+        self.label(transcript, textvariable=self.draft_status, bg=PALE, padx=9, pady=5,
+                   wraplength=210, justify="left").pack(fill="x")
         self.transcript = self.editor(transcript, editable=True)
+        self.draft_view = tk.Text(self.transcript.master, height=3, width=1, wrap="word", borderwidth=0,
+                                  highlightthickness=0, bg=PALE, fg=INK, padx=12, pady=5,
+                                  font=(FONT, 11), state="disabled")
         self.transcript.bind("<<Modified>>", self.transcript_changed)
         self.placeholder = self.label(self.transcript, "Record, open audio or type here.", bg="#FAFCFC", fg=MUTED)
         self.placeholder.place(x=12, y=11)
@@ -327,7 +331,11 @@ class MeetNoteApp:
         view.delete("1.0", "end")
         view.insert("1.0", text)
         view.configure(state="disabled")
-        view.see("end-1c")
+        if text:
+            view.grid(row=0, column=0, columnspan=2, sticky="ew")
+            view.see("end-1c")
+        else:
+            view.grid_remove()
 
     def refresh_devices(self):
         if self.capture:
@@ -459,8 +467,9 @@ class MeetNoteApp:
         self.timer.set("00:00")
         self.capture_label.set(f"Recording · {self.mode.get()}")
         self.meter_status.configure(fg="#FFB7A5")
-        self.show_draft("Listening for speech…")
+        self.draft_status.set(LISTENING)
         self.message("Recording. Draft captions update while you speak.")
+        self.update_transcript_label()
         self.refresh_controls()
 
     def enqueue_recording(self):
@@ -472,7 +481,7 @@ class MeetNoteApp:
             clip = self.live.finish()
         if clip is not None:
             self.audio.append((clip, *self.capture_settings))
-            self.show_draft("Finalizing phrase…")
+            self.draft_status.set("Finalizing phrase…")
 
     def stop_capture(self):
         self.capture.stop()
@@ -486,11 +495,13 @@ class MeetNoteApp:
         self.live = None
         self.capture_label.set("Recording stopped")
         self.meter_status.configure(fg="#BCE1DB")
-        self.show_draft("Finishing transcript…" if self.audio and not self.failed else DRAFT_HINT)
+        self.show_draft("")
+        self.draft_status.set("Finishing transcript…" if self.audio and not self.failed else DRAFT_HINT)
         if self.audio_warning:
             self.message(self.audio_warning, error=True)
         elif not self.audio:
             self.message("Recording stopped. No additional audio was captured.")
+        self.update_transcript_label()
         self.refresh_controls()
 
     def open_audio(self):
@@ -556,8 +567,11 @@ class MeetNoteApp:
             elif name in ("notes", "map"):
                 self.notes_result(value, error, show_map=name == "map")
             elif name == "draft":
-                if value and self.live and self.draft_revision == self.live.revision:
+                # A pause can queue the final clip while its draft is still being recognized.
+                if value and self.live and self.live.revision - self.draft_revision <= 1:
                     self.show_draft(value)
+                    if not self.audio:
+                        self.draft_status.set("Transcribing speech…")
             elif name == "warmup":
                 if error:
                     self.warm_error = error
@@ -596,12 +610,10 @@ class MeetNoteApp:
                 self.transcript.see("end")
             self.language_label = {code: name for name, code in LANGUAGES.items()}.get(language, language or "")
             self.transcript_changed()
+        self.show_draft("")
         if self.audio:
             return
-        if self.capture:
-            self.show_draft("Listening for speech…")
-        else:
-            self.show_draft(DRAFT_HINT)
+        self.draft_status.set(LISTENING if self.capture else DRAFT_HINT)
         if self.audio_warning:
             self.message(self.audio_warning, error=True)
         elif self.capture:
@@ -618,7 +630,7 @@ class MeetNoteApp:
         words = len(text.split())
         suffix = f"  ·  {self.language_label}" if self.language_label else ""
         self.transcript_label.set(f"{words} {'word' if words == 1 else 'words'}{suffix}")
-        if not text and self.root.focus_get() != self.transcript:
+        if not text and not self.capture and self.root.focus_get() != self.transcript:
             self.placeholder.place(x=12, y=11)
         else:
             self.placeholder.place_forget()
