@@ -26,8 +26,8 @@ TEAL = "#176B68"
 PALE = "#E6F1EF"
 RUST = "#A73827"
 FONT = "Segoe UI"
-LIVE_POLL_SECONDS = 0.25
-DRAFT_HINT = "Draft captions appear here while you speak."
+LIVE_POLL_SECONDS = 0.18
+DRAFT_HINT = "Speech appears in the transcript as you talk."
 LISTENING = "Listening for speech…"
 AUDIO_TYPES = [("Audio and recordings", "*.wav *.mp3 *.m4a *.mp4 *.ogg *.opus *.flac *.webm *.aac"),
                ("All files", "*.*")]
@@ -59,6 +59,62 @@ def warm_whisper(model_name):
     model = get_model(model_name)
     get_vad_model()
     transcribe_live(np.zeros(TARGET_RATE // 4, dtype=np.float32), model, "en", draft=True)
+
+
+class TranscriptText(tk.Text):
+    def __init__(self, parent, **options):
+        super().__init__(parent, **options)
+        self._draft = ""
+        self._draft_mark = "draft_start"
+        self.tag_configure("draft", foreground=MUTED)
+        self._widget_command = f"{self._w}_widget"
+        self.tk.call("rename", self._w, self._widget_command)
+        self.tk.createcommand(self._w, self._edit)
+
+    def destroy(self):
+        super().destroy()
+        self.tk.deletecommand(self._w)
+
+    @property
+    def confirmed_end(self):
+        return self._draft_mark if self._draft else "end-1c"
+
+    def following_tail(self):
+        return self.yview()[1] >= 1.0 and (
+            self.focus_get() != self or self.compare("insert", ">=", self.confirmed_end)
+        )
+
+    def _confirmed_index(self, index):
+        return self._draft_mark if self.compare(index, ">", self._draft_mark) else index
+
+    def _edit(self, command, *args):
+        # Keep keyboard edits and paste inside the confirmed text, including at the end.
+        if self._draft and args:
+            if command == "insert":
+                args = (self._confirmed_index(args[0]), *args[1:])
+            elif command == "delete":
+                if len(args) % 2:
+                    args += (f"{args[-1]} + 1 chars",)
+                args = tuple(self._confirmed_index(index) for index in args)
+            elif command == "replace" and len(args) >= 2:
+                args = (self._confirmed_index(args[0]), self._confirmed_index(args[1]), *args[2:])
+        return self.tk.call(self._widget_command, command, *args)
+
+    def set_draft(self, text):
+        if self._draft == text:
+            return
+        start = self.index(self.confirmed_end)
+        modified = self.edit_modified()
+        # Draft refreshes must stay out of the editor's undo history.
+        self.configure(undo=False)
+        try:
+            self.tk.call(self._widget_command, "replace", start, "end-1c", text, ("draft",))
+            self.mark_set(self._draft_mark, start)
+            self.mark_gravity(self._draft_mark, "right")
+            self._draft = text
+            self.edit_modified(modified)
+        finally:
+            self.configure(undo=True)
 
 
 class MindMapPreview(tk.Toplevel):
@@ -204,16 +260,15 @@ class MeetNoteApp:
     def editor(self, parent, *, editable=False):
         frame = tk.Frame(parent, bg=WHITE, highlightbackground=BORDER, highlightthickness=1)
         frame.pack(fill="both", expand=True, pady=(13, 12))
-        editor = tk.Text(frame, wrap="word", highlightthickness=0, borderwidth=0,
-                         bg="#FAFCFC", fg=INK, insertbackground=TEAL, selectbackground="#C3E4DF",
-                         padx=12, pady=12, spacing1=2, spacing3=5, width=5, height=7,
-                         undo=editable, font=(FONT, 11), tabs=("16p",))
+        widget = TranscriptText if editable else tk.Text
+        editor = widget(frame, wrap="word", highlightthickness=0, borderwidth=0,
+                        bg="#FAFCFC", fg=INK, insertbackground=TEAL, selectbackground="#C3E4DF",
+                        padx=12, pady=12, spacing1=2, spacing3=5, width=5, height=7,
+                        undo=editable, font=(FONT, 11), tabs=("16p",))
         scrollbar = ttk.Scrollbar(frame, orient="vertical", command=editor.yview)
         editor.configure(yscrollcommand=scrollbar.set)
-        frame.grid_columnconfigure(0, weight=1)
-        frame.grid_rowconfigure(1, weight=1)
-        editor.grid(row=1, column=0, sticky="nsew")
-        scrollbar.grid(row=1, column=1, sticky="ns")
+        scrollbar.pack(side="right", fill="y")
+        editor.pack(side="left", fill="both", expand=True)
         return editor
 
     def layout(self):
@@ -280,13 +335,9 @@ class MeetNoteApp:
         metadata.pack(fill="x", pady=(3, 0))
         self.field(metadata, "Meeting title", self.title)
         self.field(metadata, "Meeting date", self.date)
-        self.label(transcript, "Live draft", bold=True).pack(anchor="w", pady=(9, 3))
         self.label(transcript, textvariable=self.draft_status, bg=PALE, padx=9, pady=5,
-                   wraplength=210, justify="left").pack(fill="x")
+                   wraplength=210, justify="left").pack(fill="x", pady=(9, 0))
         self.transcript = self.editor(transcript, editable=True)
-        self.draft_view = tk.Text(self.transcript.master, height=3, width=1, wrap="word", borderwidth=0,
-                                  highlightthickness=0, bg=PALE, fg=INK, padx=12, pady=5,
-                                  font=(FONT, 11), state="disabled")
         self.transcript.bind("<<Modified>>", self.transcript_changed)
         self.placeholder = self.label(self.transcript, "Record, open audio or type here.", bg="#FAFCFC", fg=MUTED)
         self.placeholder.place(x=12, y=11)
@@ -325,17 +376,14 @@ class MeetNoteApp:
         self.status.set(text)
         self.status_bar.configure(fg=RUST if error else MUTED)
 
-    def show_draft(self, text):
-        view = self.draft_view
-        view.configure(state="normal")
-        view.delete("1.0", "end")
-        view.insert("1.0", text)
-        view.configure(state="disabled")
-        if text:
-            view.grid(row=0, column=0, columnspan=2, sticky="ew")
+    def show_draft(self, text, *, continued=False):
+        view = self.transcript
+        follow = view.following_tail()
+        if text and self.current_transcript():
+            text = (" " if continued else "\n\n") + text
+        view.set_draft(text)
+        if text and follow:
             view.see("end-1c")
-        else:
-            view.grid_remove()
 
     def refresh_devices(self):
         if self.capture:
@@ -495,7 +543,8 @@ class MeetNoteApp:
         self.live = None
         self.capture_label.set("Recording stopped")
         self.meter_status.configure(fg="#BCE1DB")
-        self.show_draft("")
+        if not self.audio or self.failed:
+            self.show_draft("")
         self.draft_status.set("Finishing transcript…" if self.audio and not self.failed else DRAFT_HINT)
         if self.audio_warning:
             self.message(self.audio_warning, error=True)
@@ -569,7 +618,8 @@ class MeetNoteApp:
             elif name == "draft":
                 # A pause can queue the final clip while its draft is still being recognized.
                 if value and self.live and self.live.revision - self.draft_revision <= 1:
-                    self.show_draft(value)
+                    overlap = self.audio[0][0].start if self.audio else len(self.live.context)
+                    self.show_draft(value, continued=bool(overlap))
                     if not self.audio:
                         self.draft_status.set("Transcribing speech…")
             elif name == "warmup":
@@ -594,6 +644,8 @@ class MeetNoteApp:
         self.root.after(100, self.tick)
 
     def audio_result(self, value, error):
+        follow = self.transcript.following_tail()
+        self.show_draft("")
         if error:
             self.failed = True
             if self.capture:
@@ -604,13 +656,13 @@ class MeetNoteApp:
         sentence, language = value
         if sentence:
             if self.current_transcript():
-                self.transcript.insert("end-1c", "\n\n")
+                continued = isinstance(source, LiveClip) and source.start > 0
+                sentence = (" " if continued else "\n\n") + sentence
             self.transcript.insert("end-1c", sentence)
-            if self.root.focus_get() != self.transcript:
+            if follow:
                 self.transcript.see("end")
             self.language_label = {code: name for name, code in LANGUAGES.items()}.get(language, language or "")
             self.transcript_changed()
-        self.show_draft("")
         if self.audio:
             return
         self.draft_status.set(LISTENING if self.capture else DRAFT_HINT)
@@ -623,7 +675,7 @@ class MeetNoteApp:
             self.message("Transcription complete." if has_speech else "No clear speech in this audio section.")
 
     def current_transcript(self):
-        return self.transcript.get("1.0", "end-1c").strip() if hasattr(self, "transcript") else ""
+        return self.transcript.get("1.0", self.transcript.confirmed_end).strip() if hasattr(self, "transcript") else ""
 
     def update_transcript_label(self):
         text = self.current_transcript()

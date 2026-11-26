@@ -115,14 +115,14 @@ def test_source_switch_preserves_the_live_session_and_transcript_edits(workspace
     assert name == "audio"
     assert len(clip.samples) == live.FIRST_DRAFT + 1600
     assert clip.samples[-1] == 0.5
-    assert "out of date" not in workspace.draft_view.get("1.0", "end")
+    assert "out of date" not in workspace.transcript.get("1.0", "end")
     workspace.results.put(("audio", ("The last phrase.", "en"), ""))
     workspace.tick()
     assert workspace.current_transcript() == "My edit.\n\nThe last phrase."
     assert workspace.summarize_button.instate(["!disabled"])
 
 
-def test_live_draft_appears_inside_transcript_until_phrase_is_finalized(workspace, monkeypatch):
+def test_continuous_speech_updates_the_transcript_before_a_pause(workspace, monkeypatch):
     def detect(samples):
         voiced = np.flatnonzero(samples)
         return [{"start": voiced[0], "end": voiced[-1] + 1}] if len(voiced) else []
@@ -138,21 +138,44 @@ def test_live_draft_appears_inside_transcript_until_phrase_is_finalized(workspac
     workspace.tick()
     assert workspace.job == "draft"
 
-    workspace.capture.drain_samples = lambda: np.zeros(live.PAUSE, dtype=np.float32)
-    workspace.enqueue_recording()
     workspace.results.put(("draft", "The next", ""))
     workspace.tick()
-    assert workspace.job == "audio"
-    assert workspace.draft_view.master == workspace.transcript.master
-    assert workspace.draft_view.winfo_manager() == "grid"
-    assert workspace.draft_view.get("1.0", "end-1c") == "The next"
+    assert not workspace.audio
+    assert workspace.transcript.get("1.0", "end-1c") == "Earlier speech.\n\nThe next"
     assert workspace.current_transcript() == "Earlier speech."
+
+    workspace.capture.drain_samples = lambda: np.ones(live.DRAFT_INTERVAL, dtype=np.float32)
+    workspace.enqueue_recording()
+    workspace.tick()
+    assert workspace.job == "draft"
+    workspace.capture.drain_samples = lambda: np.zeros(live.PAUSE, dtype=np.float32)
+    workspace.enqueue_recording()
+    workspace.results.put(("draft", "The next phrase", ""))
+    workspace.tick()
+    assert workspace.job == "audio"
+    assert workspace.transcript.get("1.0", "end-1c") == "Earlier speech.\n\nThe next phrase"
 
     workspace.results.put(("audio", ("The next phrase.", "en"), ""))
     workspace.tick()
-    assert workspace.draft_view.winfo_manager() == ""
+    assert workspace.transcript.get("1.0", "end-1c") == workspace.current_transcript()
     assert workspace.current_transcript() == "Earlier speech.\n\nThe next phrase."
     assert workspace.draft_status.get() == desktop.LISTENING
+
+
+def test_live_updates_preserve_transcript_edits_and_undo(workspace):
+    transcript = workspace.transcript
+    transcript.insert("1.0", "Earlier speech.")
+    transcript.edit_separator()
+    workspace.show_draft("Draft")
+    transcript.insert("end-1c", " Edited.")
+    workspace.show_draft("Latest draft")
+    assert workspace.current_transcript() == "Earlier speech. Edited."
+    transcript.edit_undo()
+    assert workspace.current_transcript() == "Earlier speech."
+    assert transcript.get("1.0", "end-1c") == "Earlier speech.\n\nLatest draft"
+    transcript.edit_redo()
+    transcript.delete("end-2c")
+    assert transcript.get("1.0", "end-1c") == "Earlier speech. Edited.\n\nLatest draft"
 
 
 def test_notes_only_export_with_matching_transcript(workspace, tmp_path, monkeypatch):
